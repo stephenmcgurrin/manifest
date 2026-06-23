@@ -73,7 +73,11 @@ export async function getLocalStorageItem(item) {
   return JSON.parse(window.localStorage.getItem(item));
 }
 
-export function confirm(text) {
+export async function confirm(text) {
+  if (isTauri) {
+    const { ask } = await import("@tauri-apps/plugin-dialog");
+    return await ask(text, { title: "Manifest", kind: "warning" });
+  }
   return window.confirm(text);
 };
 

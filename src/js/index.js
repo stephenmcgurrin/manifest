@@ -179,7 +179,7 @@ async function handleMemoDragEnd(e) {
 };
 
 async function handleMemoClose(e) {
-  if (confirm("Are you sure you want to remove this memo?")) {
+  if (await confirm("Are you sure you want to remove this memo?")) {
     const id = e.target.parentNode.dataset.id;
     const memos = await getLocalStorageItem("manifest_memos");
     delete memos[id];
