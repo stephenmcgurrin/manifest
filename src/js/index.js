@@ -1,13 +1,20 @@
-import { GRID_SIZE, MARGIN, DRAG_INDEX, STATIC_INDEX, DEFAULT_MEMO } from "./globals";
+import { GRID_SIZE, MARGIN, DRAG_INDEX, STATIC_INDEX } from "./globals";
 import { snapToGrid, confirm, generateUUID, getLocalStorageItem, setLocalStorageItem, decreaseAllMemoIndexes, checkBounds, initStorage } from "./utils";
+import {
+  initThemes,
+  getActiveTheme,
+  applyTheme,
+  toggleLastTheme,
+  setOnThemeApplied,
+} from "./themes";
 
 import "../sass/index.scss";
 
-let theme = "light";
 let activeMemo;
 
 let main, canvas, board, selection;
 let currentMouse, currentSize;
+let footerHeight = 0;
 
 /*
   Generic Event Handlers
@@ -396,58 +403,25 @@ async function handleBoardDragEnd(e) {
   App Functions
 */
 
-async function toggleTheme() {
-  const body = document.querySelector("body");
-  if (theme === "light") {
-    body.classList.add("dark");
-    theme = "dark";
-    await setLocalStorageItem("manifest_theme", "dark");
-  } else {
-    body.classList.remove("dark");
-    theme = "light";
-    await setLocalStorageItem("manifest_theme", "light");
-  }
-
-  // Redraw the canvas
-  onResize();
-}
-
 async function handleTheme() {
-  const body = document.querySelector("body");
-  const savedPreference = await getLocalStorageItem("manifest_theme");
-
-  // Prefer saved preference over OS preference
-  if (savedPreference) {
-    if (savedPreference === "dark") {
-      body.classList.add("dark");
-      theme = "dark";
-      await setLocalStorageItem("manifest_theme", "dark");
-    } else {
-      body.classList.remove("dark");
-      theme = "light";
-      await setLocalStorageItem("manifest_theme", "light");
-    }
-    return;
-  }
-
-  if (window.matchMedia("(prefers-color-scheme: dark)").matches) {
-    body.classList.add("dark");
-    theme = "dark";
-  }
+  const activeName = await initThemes();
+  applyTheme(activeName);
 }
 
 function onKeydown(e) {
   if ((e.code === "KeyT" || e.keyCode === 84) && e.altKey) {
-    toggleTheme();
+    toggleLastTheme();
   }
 }
 
 function onResize() {
+  const viewHeight = window.innerHeight - footerHeight;
+
   main.style.width = `${window.innerWidth}px`;
-  main.style.height = `${window.innerHeight}px`;
+  main.style.height = `${viewHeight}px`;
 
   const width = (window.innerWidth - MARGIN) - 1;
-  const height = (window.innerHeight - MARGIN) + 1;
+  const height = (viewHeight - MARGIN) + 1;
 
   canvas.setAttribute("width", width);
   canvas.setAttribute("height", height);
@@ -458,10 +432,11 @@ function onResize() {
   canvas.style.height = `${height}px`;
 
   const context = canvas.getContext("2d");
+  const gridDotColor = getActiveTheme().gridDot;
 
   for (let x = 0; x <= width; x += GRID_SIZE) {
     for (let y = 0; y <= height; y += GRID_SIZE) {
-      context.fillStyle = theme === "light" ? "rgba(0, 0, 0, 0.5)" : "rgba(255, 255, 255, 0.4)";
+      context.fillStyle = gridDotColor;
       context.beginPath();
       context.rect(x, y, 1, 1);
       context.fill();
@@ -480,6 +455,9 @@ function onResize() {
 async function onLoad() {
   await initStorage();
   await handleTheme();
+
+  // Redraw canvas whenever theme changes
+  setOnThemeApplied(() => onResize());
 
   main = document.createElement("main");
   main.setAttribute("id", "app");
@@ -502,19 +480,54 @@ async function onLoad() {
   }, { passive: false, useCapture: false });
 
   const memos = await getLocalStorageItem("manifest_memos");
-  if (!memos || Object.keys(memos).length === 0) {
-    const memo = createMemo(DEFAULT_MEMO.id, DEFAULT_MEMO.text, DEFAULT_MEMO.position, DEFAULT_MEMO.size);
-    board.appendChild(memo);
-
-    const memos = {};
-    memos[DEFAULT_MEMO.id] = { text: DEFAULT_MEMO.text, position: DEFAULT_MEMO.position, size: DEFAULT_MEMO.size };
-    await setLocalStorageItem("manifest_memos", memos);
-  } else {
+  if (memos) {
     for (const key of Object.keys(memos)) {
       const memo = createMemo(key, memos[key].text, memos[key].position, memos[key].size);
       board.appendChild(memo);
     }
   }
+
+  const footer = document.createElement("footer");
+  footer.setAttribute("id", "attribution");
+
+  // Settings gear icon
+  const gearIcon = document.createElement("span");
+  gearIcon.setAttribute("id", "settings-gear");
+  gearIcon.textContent = "\u2699";
+  gearIcon.title = "Settings";
+  gearIcon.addEventListener("click", async function (e) {
+    e.stopPropagation();
+    const { openSettings } = await import("./settings.js");
+    openSettings();
+  });
+  footer.appendChild(gearIcon);
+
+  const link1 = document.createElement("span");
+  link1.className = "attribution-link";
+  link1.dataset.url = "https://github.com/jonathontoon/manifest";
+  link1.textContent = "Jonathon Toon";
+
+  const link2 = document.createElement("span");
+  link2.className = "attribution-link";
+  link2.dataset.url = "https://github.com/stephenmcgurrin/manifest";
+  link2.textContent = "Stephen McGurrin";
+
+  footer.appendChild(document.createTextNode("Original creator: "));
+  footer.appendChild(link1);
+  footer.appendChild(document.createTextNode(" | Desktop GUI Wrapper: "));
+  footer.appendChild(link2);
+
+  footer.addEventListener("click", async function(e) {
+    const link = e.target.closest(".attribution-link");
+    if (link && link.dataset.url) {
+      e.preventDefault();
+      const { openUrl } = await import("@tauri-apps/plugin-opener");
+      await openUrl(link.dataset.url);
+    }
+  });
+
+  document.body.appendChild(footer);
+  footerHeight = 24;
 
   onResize();
 };
