@@ -1,50 +1,37 @@
-
 # ❏ Manifest
-
-[![GitHub Release](https://img.shields.io/github/release/jonathontoon/manifest.svg)](https://github.com/jonathontoon/manifest/releases/latest)
-[![Size](https://img.shields.io/bundlephobia/minzip/manifest?style=flat)](https://github.com/jonathontoon/manifest/releases/latest)
-[![Project License](https://img.shields.io/github/license/jonathontoon/manifest.svg)](https://github.com/jonathontoon/manifest/blob/master/LICENSE)
 
 ![Manifest](https://i.imgur.com/sdKEe3H.png)
 
-### Table of Contents
+A grid-based pinboard for note-taking. Click and drag anywhere to create a note, snap it to the grid set by your window size, then move, resize, or delete it. Notes persist to disk between sessions and the app works fully offline.
 
-- [Introduction](#introduction)
-- [FAQ](#faq)
-- [Report Bugs](#report-bugs)
-- [Donate](#Donate)
-- [Acknowledgements](#acknowledgements)
+This is a personal macOS desktop build of [jonathontoon/manifest](https://github.com/jonathontoon/manifest), wrapped in a Tauri 2 shell with a theming engine, an opacity slider, and a transparent window so themes can reveal the desktop wallpaper beneath.
 
-## Introduction
-Manifest is a grid-based pinboard for note taking. Simply click and drag anywhere to create a note and snap it to the grid set by your current window size. All notes can be moved, resized and deleted. Your browser's local storage is also utilized to save notes between sessions and while offline. While completely open source and free, please consider supporting it's development through a [small donation](https://donate.stripe.com/cN23ggaU156agSYaEF).
+## Install
 
-## FAQ
+Download `Manifest_1.1.1_aarch64.dmg` from the [latest release](https://github.com/stephenmcgurrin/manifest/releases/latest), open it, and drag `Manifest.app` to `/Applications`.
 
-### 1. Is this available as some kind of web extension?
-In order to avoid investing too much in a single eco-system there's no plan to create an extension right now.
+Apple Silicon only.
 
-### 2. What about a desktop app?
-Given that the easiest way to make a desktop app would use something like [Electron](https://github.com/electron) or most likely [DeskGap](https://github.com/patr0nus/DeskGap), which are just web views themselves, there's nothing really unique that a desktop-specific app could offer. Manifest is however a [progressive web app](https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps), so using most popular web browsers you can save it as a stand alone application.
+## Themes
 
-### 3. Can Manifest work on mobile?
-Manifest is not a mobile-centric product. This is intentional, as the specific experience and interactions which offer such experience rely on more accurate types of input. If mobile support was made possible though it would most likely require it's own bespoke experience. In saying that, tablet support is definitely a goal for this project.
+Fourteen built-in presets: Light, Dark, the four Catppuccin variants (Latte, Frappé, Macchiato, Mocha), Dracula, Nord, Tokyo Night, Gruvbox (Dark and Light), Solarized (Dark and Light), and Rosé Pine.
 
-### 4. Does Manifest have a dark mode?
+Add or edit your own from the settings panel. An opacity slider on the background colour lets the desktop wallpaper show through.
 
-Yes. By default, it reads from your OS preference. You can toggle between light and dark mode with <kbd>alt</kbd><kbd>t</kbd>, and your preference will be saved.
+Toggle the last-used theme with <kbd>Alt</kbd>+<kbd>T</kbd>.
 
-### 5. What is Manifest built with?
-Simply vanilla JS and SASS, bundled with Parcel.
+## Privacy
 
-### 6. Does Manifest use any analytics?
-Zero. Manifest provides no connection to a server, and no data is ever sent outside of the browser. All data is stored locally.
+No analytics. No server. No telemetry. All notes and theme data live on your own disk.
 
-## Report Bugs
-Please create a Github [issue](https://github.com/jonathontoon/manifest/issues), following the `ISSUE_TEMPLATE.md` and provide as much information as possible regarding the bug, including screenshots or error codes.
+## Built with
 
-## Donate
-Manifest is free and will always be free. However if you'd like to contribute a small donation via [LiberaPay](https://liberapay.com/jonathontoon/) to help pay for domain and server costs it would be greatly appreciated.
+Vanilla JS and SASS bundled with Parcel, wrapped in Tauri 2 (Rust).
+
+## Licence
+
+See [LICENSE](LICENSE).
 
 ## Acknowledgements
 
-Thank you to [bnjm](https://www.github.com/bnjm) for help with the grid snapping logic, as well as everyone who helped test the first release.
+Built on the original [Manifest](https://github.com/jonathontoon/manifest) by Jonathon Toon, with grid-snapping logic by [bnjm](https://www.github.com/bnjm).
