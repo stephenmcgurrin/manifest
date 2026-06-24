@@ -2,3 +2,13 @@ node_modules
 yarn-error.log
 dist
 .parcel-cache
+
+# Tauri
+src-tauri/target
+src-tauri/gen
+.DS_Store
+._*
+
+# Local working notes (not for repo)
+TRANSPARENCY-NOTES.md
+goals/

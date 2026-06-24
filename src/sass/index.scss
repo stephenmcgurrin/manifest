@@ -1,26 +1,29 @@
 @use "reset";
 
+// CSS custom properties are set dynamically by themes.js at runtime.
+// These :root fallback values prevent a flash of unstyled content
+// before JS loads; they represent the Light theme default.
 :root {
     --foreground: black;
     --background: white;
+    --surface: white;
     --gray: rgba(0, 0, 0, 0.05);
     --dark-gray: rgba(0, 0, 0, 0.25);
 }
 
+html {
+    width: 100%;
+    height: 100%;
+    background: transparent;
+}
+
 body {
-    min-width: 100%;
-    min-height: 100%;
+    width: 100%;
+    height: 100%;
     overflow: hidden;
     cursor: pointer;
     background: var(--background);
     color: var(--foreground);
-
-    &.dark {
-        --foreground: white;
-        --background: black;
-        --gray: rgba(255, 255, 255, 0.1);
-        --dark-gray: rgba(255, 255, 255, 0.1);
-    }
 
     main {
         position: absolute;
@@ -149,5 +152,275 @@ body {
                 }
             }
         }
+    }
+
+    footer#attribution {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        height: 24px;
+        line-height: 24px;
+        padding: 0 12px;
+        font-family: monospace;
+        font-size: 11px;
+        color: var(--foreground);
+        background: var(--surface);
+        border-top: 1px solid var(--dark-gray);
+        z-index: 100000;
+        user-select: none;
+
+        .attribution-link {
+            color: var(--foreground);
+            text-decoration: underline;
+            cursor: pointer;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Settings gear icon in footer
+// ---------------------------------------------------------------------------
+
+#settings-gear {
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 24px;
+    padding: 0 8px;
+    margin-right: 8px;
+    border-right: 1px solid var(--dark-gray);
+    user-select: none;
+    opacity: 0.7;
+    transition: opacity 0.15s;
+
+    &:hover {
+        opacity: 1;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Settings popup
+// ---------------------------------------------------------------------------
+
+#settings-backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 100001;
+    background: rgba(0, 0, 0, 0.45);
+    align-items: center;
+    justify-content: center;
+    cursor: default;
+}
+
+#settings-panel {
+    background: var(--surface);
+    color: var(--foreground);
+    border: 1px solid var(--dark-gray);
+    border-radius: 6px;
+    padding: 24px;
+    min-width: 380px;
+    max-width: 520px;
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+    font-family: monospace;
+    font-size: 13px;
+
+    h2 {
+        font-size: 16px;
+        font-weight: bold;
+        margin: 0;
+    }
+
+    h3 {
+        font-size: 14px;
+        font-weight: bold;
+        margin: 0 0 12px 0;
+    }
+}
+
+// ---- Theme list ----
+
+#theme-list {
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 50vh;
+
+    .theme-empty {
+        color: var(--foreground);
+        opacity: 0.5;
+        text-align: center;
+        padding: 24px 0;
+    }
+}
+
+.theme-card {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border: 1px solid var(--dark-gray);
+    border-radius: 4px;
+    background: var(--gray);
+
+    .theme-swatch {
+        display: inline-block;
+        width: 20px;
+        height: 20px;
+        border-radius: 3px;
+        border: 1px solid var(--dark-gray);
+        flex-shrink: 0;
+    }
+
+    .theme-name {
+        flex: 1;
+        font-weight: normal;
+
+        &.active {
+            font-weight: bold;
+        }
+    }
+
+    .theme-badge {
+        font-size: 10px;
+        opacity: 0.5;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+
+    .theme-actions {
+        display: flex;
+        gap: 4px;
+        flex-shrink: 0;
+    }
+}
+
+// ---- Buttons ----
+
+#settings-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+}
+
+#settings-panel button,
+.theme-actions button {
+    font-family: monospace;
+    font-size: 12px;
+    padding: 4px 10px;
+    border: 1px solid var(--foreground);
+    background: var(--surface);
+    color: var(--foreground);
+    cursor: pointer;
+    border-radius: 3px;
+    transition: background 0.1s;
+
+    &:hover {
+        background: var(--gray);
+    }
+
+    &.btn-danger:hover {
+        background: rgba(255, 0, 0, 0.2);
+        border-color: red;
+        color: red;
+    }
+}
+
+// ---- Add / Edit form ----
+
+#theme-form-view {
+    overflow-y: auto;
+    max-height: 55vh;
+}
+
+#theme-form {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+
+    .form-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+
+        label {
+            width: 110px;
+            flex-shrink: 0;
+            font-size: 12px;
+            opacity: 0.8;
+        }
+
+        .color-input-wrapper {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex: 1;
+
+            input[type="color"] {
+                width: 32px;
+                height: 28px;
+                padding: 0;
+                border: 1px solid var(--dark-gray);
+                border-radius: 3px;
+                cursor: pointer;
+                background: none;
+                flex-shrink: 0;
+            }
+
+            .opacity-slider-wrapper {
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                flex: 1;
+                min-width: 0;
+
+                .opacity-label {
+                    font-size: 11px;
+                    width: 32px;
+                    text-align: right;
+                    flex-shrink: 0;
+                    opacity: 0.7;
+                }
+
+                .opacity-slider {
+                    flex: 1;
+                    min-width: 0;
+                    accent-color: var(--foreground);
+                }
+            }
+        }
+
+        input[type="text"] {
+            font-family: monospace;
+            font-size: 12px;
+            padding: 4px 8px;
+            border: 1px solid var(--dark-gray);
+            border-radius: 3px;
+            background: var(--surface);
+            color: var(--foreground);
+        }
+    }
+
+    .form-errors {
+        color: red;
+        font-size: 12px;
+        white-space: pre-wrap;
+        padding: 6px 8px;
+        border: 1px solid red;
+        border-radius: 3px;
+        background: rgba(255, 0, 0, 0.08);
+    }
+
+    .form-buttons {
+        display: flex;
+        gap: 8px;
+        justify-content: flex-end;
+        margin-top: 4px;
     }
 }

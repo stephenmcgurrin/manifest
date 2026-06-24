@@ -1,13 +1,20 @@
-import { GRID_SIZE, MARGIN, DRAG_INDEX, STATIC_INDEX, DEFAULT_MEMO } from "./globals";
-import { snapToGrid, confirm, generateUUID, getLocalStorageItem, setLocalStorageItem, decreaseAllMemoIndexes, checkBounds } from "./utils";
+import { GRID_SIZE, MARGIN, DRAG_INDEX, STATIC_INDEX } from "./globals";
+import { snapToGrid, confirm, generateUUID, getLocalStorageItem, setLocalStorageItem, decreaseAllMemoIndexes, checkBounds, initStorage } from "./utils";
+import {
+  initThemes,
+  getActiveTheme,
+  applyTheme,
+  toggleLastTheme,
+  setOnThemeApplied
+} from "./themes";
 
 import "../sass/index.scss";
 
-let theme = "light";
 let activeMemo;
 
 let main, canvas, board, selection;
 let currentMouse, currentSize;
+let footerHeight = 0;
 
 /*
   Generic Event Handlers
@@ -55,10 +62,10 @@ function createMemo(id, text, position, size) {
     activeMemo.style.zIndex = STATIC_INDEX;
   });
   textarea.addEventListener("blur", function (e) { e.target.classList.remove("active"); }, { passive: false, useCapture: false });
-  textarea.addEventListener("input", function (e) {
-    const memos = getLocalStorageItem("manifest_memos");
+  textarea.addEventListener("input", async function (e) {
+    const memos = await getLocalStorageItem("manifest_memos");
     memos[id] = { ...memos[id], text: e.target.value };
-    setLocalStorageItem("manifest_memos", memos);
+    await setLocalStorageItem("manifest_memos", memos);
   }, { passive: false, useCapture: false });
 
   memo.appendChild(textarea);
@@ -129,7 +136,7 @@ function handleMemoDragMove(e) {
   }
 };
 
-function handleMemoDragEnd(e) {
+async function handleMemoDragEnd(e) {
   const bounds = checkBounds(board.getBoundingClientRect(), activeMemo.getBoundingClientRect());
 
   const x = (e.touches && e.touches.length > 0) ? snapToGrid(e.touches[0].clientX, GRID_SIZE) : snapToGrid(e.clientX, GRID_SIZE);
@@ -162,9 +169,9 @@ function handleMemoDragEnd(e) {
   textarea.focus();
 
   const id = activeMemo.dataset.id;
-  const memos = getLocalStorageItem("manifest_memos");
+  const memos = await getLocalStorageItem("manifest_memos");
   memos[id] = { ...memos[id], position: { top, left } };
-  setLocalStorageItem("manifest_memos", memos);
+  await setLocalStorageItem("manifest_memos", memos);
 
   document.body.style.cursor = null;
   activeMemo = null;
@@ -178,12 +185,12 @@ function handleMemoDragEnd(e) {
   document.removeEventListener("touchend", handleMemoDragEnd);
 };
 
-function handleMemoClose(e) {
-  if (confirm("Are you sure you want to remove this memo?")) {
+async function handleMemoClose(e) {
+  if (await confirm("Are you sure you want to remove this memo?")) {
     const id = e.target.parentNode.dataset.id;
-    const memos = getLocalStorageItem("manifest_memos");
+    const memos = await getLocalStorageItem("manifest_memos");
     delete memos[id];
-    setLocalStorageItem("manifest_memos", memos);
+    await setLocalStorageItem("manifest_memos", memos);
 
     board.removeChild(e.target.parentNode);
   }
@@ -238,7 +245,7 @@ function handleMemoResizeMove(e) {
   }
 };
 
-function handleMemoResizeEnd(e) {
+async function handleMemoResizeEnd(e) {
   const x = (e.touches && e.touches.length > 0) ? snapToGrid(e.touches[0].clientX, GRID_SIZE) : snapToGrid(e.clientX, GRID_SIZE);
   const y = (e.touches && e.touches.length > 0) ? snapToGrid(e.touches[0].clientY, GRID_SIZE) : snapToGrid(e.clientY, GRID_SIZE);
 
@@ -278,9 +285,9 @@ function handleMemoResizeEnd(e) {
   textarea.focus();
 
   const id = activeMemo.dataset.id;
-  const memos = getLocalStorageItem("manifest_memos");
+  const memos = await getLocalStorageItem("manifest_memos");
   memos[id] = { ...memos[id], size: { width, height } };
-  setLocalStorageItem("manifest_memos", memos);
+  await setLocalStorageItem("manifest_memos", memos);
 
   document.body.style.cursor = null;
   activeMemo = null;
@@ -341,7 +348,7 @@ function handleBoardDragMove(e) {
   selection.style.height = `${height}px`;
 };
 
-function handleBoardDragEnd(e) {
+async function handleBoardDragEnd(e) {
   const boardRect = board.getBoundingClientRect();
   const selectionRect = selection.getBoundingClientRect();
 
@@ -373,9 +380,9 @@ function handleBoardDragEnd(e) {
     const textarea = memo.querySelectorAll(".input")[0];
     textarea.focus();
 
-    const memos = getLocalStorageItem("manifest_memos");
+    const memos = await getLocalStorageItem("manifest_memos");
     memos[id] = { text: null, position: { top, left }, size: { width, height } };
-    setLocalStorageItem("manifest_memos", memos);
+    await setLocalStorageItem("manifest_memos", memos);
 
     activeMemo = memo;
   }
@@ -396,58 +403,25 @@ function handleBoardDragEnd(e) {
   App Functions
 */
 
-function toggleTheme() {
-  const body = document.querySelector("body");
-  if (theme === "light") {
-    body.classList.add("dark");
-    theme = "dark";
-    setLocalStorageItem("manifest_theme", "dark");
-  } else {
-    body.classList.remove("dark");
-    theme = "light";
-    setLocalStorageItem("manifest_theme", "light");
-  }
-
-  // Redraw the canvas
-  onResize();
-}
-
-function handleTheme() {
-  const body = document.querySelector("body");
-  const savedPreference = getLocalStorageItem("manifest_theme");
-
-  // Prefer saved preference over OS preference
-  if (savedPreference) {
-    if (savedPreference === "dark") {
-      body.classList.add("dark");
-      theme = "dark";
-      setLocalStorageItem("manifest_theme", "dark");
-    } else {
-      body.classList.remove("dark");
-      theme = "light";
-      setLocalStorageItem("manifest_theme", "light");
-    }
-    return;
-  }
-
-  if (window.matchMedia("(prefers-color-scheme: dark)").matches) {
-    body.classList.add("dark");
-    theme = "dark";
-  }
+async function handleTheme() {
+  const activeName = await initThemes();
+  applyTheme(activeName);
 }
 
 function onKeydown(e) {
   if ((e.code === "KeyT" || e.keyCode === 84) && e.altKey) {
-    toggleTheme();
+    toggleLastTheme();
   }
 }
 
 function onResize() {
+  const viewHeight = window.innerHeight - footerHeight;
+
   main.style.width = `${window.innerWidth}px`;
-  main.style.height = `${window.innerHeight}px`;
+  main.style.height = `${viewHeight}px`;
 
   const width = (window.innerWidth - MARGIN) - 1;
-  const height = (window.innerHeight - MARGIN) + 1;
+  const height = (viewHeight - MARGIN) + 1;
 
   canvas.setAttribute("width", width);
   canvas.setAttribute("height", height);
@@ -458,10 +432,11 @@ function onResize() {
   canvas.style.height = `${height}px`;
 
   const context = canvas.getContext("2d");
+  const gridDotColor = getActiveTheme().gridDot;
 
   for (let x = 0; x <= width; x += GRID_SIZE) {
     for (let y = 0; y <= height; y += GRID_SIZE) {
-      context.fillStyle = theme === "light" ? "rgba(0, 0, 0, 0.5)" : "rgba(255, 255, 255, 0.4)";
+      context.fillStyle = gridDotColor;
       context.beginPath();
       context.rect(x, y, 1, 1);
       context.fill();
@@ -477,8 +452,12 @@ function onResize() {
   currentSize = null;
 };
 
-function onLoad() {
-  handleTheme();
+async function onLoad() {
+  await initStorage();
+  await handleTheme();
+
+  // Redraw canvas whenever theme changes
+  setOnThemeApplied(() => onResize());
 
   main = document.createElement("main");
   main.setAttribute("id", "app");
@@ -500,20 +479,55 @@ function onLoad() {
     event.preventDefault();
   }, { passive: false, useCapture: false });
 
-  const memos = getLocalStorageItem("manifest_memos");
-  if (!memos || Object.keys(memos).length === 0) {
-    const memo = createMemo(DEFAULT_MEMO.id, DEFAULT_MEMO.text, DEFAULT_MEMO.position, DEFAULT_MEMO.size);
-    board.appendChild(memo);
-
-    const memos = {};
-    memos[DEFAULT_MEMO.id] = { text: DEFAULT_MEMO.text, position: DEFAULT_MEMO.position, size: DEFAULT_MEMO.size };
-    setLocalStorageItem("manifest_memos", memos);
-  } else {
+  const memos = await getLocalStorageItem("manifest_memos");
+  if (memos) {
     for (const key of Object.keys(memos)) {
       const memo = createMemo(key, memos[key].text, memos[key].position, memos[key].size);
       board.appendChild(memo);
     }
   }
+
+  const footer = document.createElement("footer");
+  footer.setAttribute("id", "attribution");
+
+  // Settings gear icon
+  const gearIcon = document.createElement("span");
+  gearIcon.setAttribute("id", "settings-gear");
+  gearIcon.textContent = "\u2699";
+  gearIcon.title = "Settings";
+  gearIcon.addEventListener("click", async function (e) {
+    e.stopPropagation();
+    const { openSettings } = await import("./settings.js");
+    openSettings();
+  });
+  footer.appendChild(gearIcon);
+
+  const link1 = document.createElement("span");
+  link1.className = "attribution-link";
+  link1.dataset.url = "https://github.com/jonathontoon/manifest";
+  link1.textContent = "Jonathon Toon";
+
+  const link2 = document.createElement("span");
+  link2.className = "attribution-link";
+  link2.dataset.url = "https://github.com/stephenmcgurrin/manifest";
+  link2.textContent = "Stephen McGurrin";
+
+  footer.appendChild(document.createTextNode("Original creator: "));
+  footer.appendChild(link1);
+  footer.appendChild(document.createTextNode(" | Desktop GUI Wrapper: "));
+  footer.appendChild(link2);
+
+  footer.addEventListener("click", async function (e) {
+    const link = e.target.closest(".attribution-link");
+    if (link && link.dataset.url) {
+      e.preventDefault();
+      const { openUrl } = await import("@tauri-apps/plugin-opener");
+      await openUrl(link.dataset.url);
+    }
+  });
+
+  document.body.appendChild(footer);
+  footerHeight = 24;
 
   onResize();
 };

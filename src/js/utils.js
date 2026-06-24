@@ -1,15 +1,84 @@
 import { GRID_SIZE } from "./globals";
 
-export function confirm(text) {
-  return window.confirm(text);
-};
+// Async storage layer. Names kept (setLocalStorageItem/getLocalStorageItem) to
+// minimise call-site churn — they now wrap Tauri fs in desktop and localStorage in browser.
+// Writes are synchronous-per-call: the file is ~1 KB and writeTextFile is microseconds,
+// so the prior debounce/quit-flush dance was not worth its complexity.
 
-export function setLocalStorageItem(item, value) {
+const DATA_FILE = "manifest-data.json";
+let initPromise = null;
+let isTauri = false;
+let cache = {};
+let fsApi = null;
+let baseDir = null;
+
+function detectTauri() {
+  return typeof window !== "undefined" && ("__TAURI_INTERNALS__" in window);
+}
+
+async function loadFromDisk() {
+  const { readTextFile, mkdir, writeTextFile, exists, BaseDirectory } = fsApi;
+  baseDir = BaseDirectory.AppData;
+
+  // mkdir with recursive:true is idempotent; no need for a separate existence probe.
+  await mkdir("", { baseDir, recursive: true });
+
+  const fileExists = await exists(DATA_FILE, { baseDir });
+  if (!fileExists) {
+    cache = {};
+    await writeTextFile(DATA_FILE, JSON.stringify(cache), { baseDir });
+    return;
+  }
+
+  try {
+    const raw = await readTextFile(DATA_FILE, { baseDir });
+    cache = raw ? JSON.parse(raw) : {};
+  } catch (err) {
+    console.error("Failed to read manifest-data.json, resetting.", err);
+    cache = {};
+  }
+}
+
+export function initStorage() {
+  if (initPromise) { return initPromise; }
+  initPromise = (async function () {
+    isTauri = detectTauri();
+    if (isTauri) {
+      fsApi = await import("@tauri-apps/plugin-fs");
+      await loadFromDisk();
+    }
+  })();
+  return initPromise;
+}
+
+export async function setLocalStorageItem(item, value) {
+  if (!initPromise) { await initStorage(); } else { await initPromise; }
+  if (isTauri) {
+    cache[item] = value;
+    try {
+      await fsApi.writeTextFile(DATA_FILE, JSON.stringify(cache), { baseDir });
+    } catch (err) {
+      console.error("Failed to persist manifest-data.json", err);
+    }
+    return;
+  }
   return window.localStorage.setItem(`${item}`, JSON.stringify(value));
-};
+}
 
-export function getLocalStorageItem(item) {
+export async function getLocalStorageItem(item) {
+  if (!initPromise) { await initStorage(); } else { await initPromise; }
+  if (isTauri) {
+    return item in cache ? cache[item] : null;
+  }
   return JSON.parse(window.localStorage.getItem(item));
+}
+
+export async function confirm(text) {
+  if (isTauri) {
+    const { ask } = await import("@tauri-apps/plugin-dialog");
+    return await ask(text, { title: "Manifest", kind: "warning" });
+  }
+  return window.confirm(text);
 };
 
 export function snapToGrid(value, grid) {
