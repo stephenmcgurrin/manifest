@@ -5,7 +5,7 @@ import {
   getActiveTheme,
   applyTheme,
   toggleLastTheme,
-  setOnThemeApplied,
+  setOnThemeApplied
 } from "./themes";
 
 import "../sass/index.scss";
@@ -517,7 +517,7 @@ async function onLoad() {
   footer.appendChild(document.createTextNode(" | Desktop GUI Wrapper: "));
   footer.appendChild(link2);
 
-  footer.addEventListener("click", async function(e) {
+  footer.addEventListener("click", async function (e) {
     const link = e.target.closest(".attribution-link");
     if (link && link.dataset.url) {
       e.preventDefault();
