@@ -30,10 +30,14 @@ body {
 
         canvas#grid {
             position: absolute;
+            transform: translateZ(0);
+            backface-visibility: hidden;
         }
 
         section#board {
             position: absolute;
+            transform: translateZ(0);
+            backface-visibility: hidden;
 
             &.active {
                 user-select: none !important;
@@ -45,6 +49,8 @@ body {
             div#selection {
                 position: absolute;
                 background-color: var(--gray);
+                transform: translateZ(0);
+                backface-visibility: hidden;
             }
 
             div.memo {
@@ -54,6 +60,8 @@ body {
                 min-height: 80px;
                 border: 1px solid var(--foreground);
                 user-select: none;
+                transform: translateZ(0);
+                backface-visibility: hidden;
 
                 &.active {
                     user-select: auto;
