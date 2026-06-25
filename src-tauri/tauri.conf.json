@@ -13,14 +13,15 @@
     "macOSPrivateApi": true,
     "windows": [
       {
-        "title": "Manifest",
+        "title": "",
         "width": 1200,
         "height": 800,
         "minWidth": 480,
         "minHeight": 360,
         "resizable": true,
         "fullscreen": false,
-        "transparent": true
+        "transparent": true,
+        "backgroundColor": "#00000000"
       }
     ],
     "security": {
