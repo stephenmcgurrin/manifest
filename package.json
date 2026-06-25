@@ -1,6 +1,6 @@
 {
   "name": "manifest",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "An instant grid-based pinboard for note taking.",
   "repository": "https://github.com/jonathontoon/manifest",
   "author": "Jonathon Toon",

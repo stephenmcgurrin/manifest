@@ -12,6 +12,16 @@ Download `Manifest_1.1.1_aarch64.dmg` from the [latest release](https://github.c
 
 Apple Silicon only.
 
+### "Manifest is damaged and can't be opened"
+
+The app is unsigned, so macOS quarantines downloads and shows this error on first launch. After dragging `Manifest.app` to `/Applications`, clear the quarantine flag:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Manifest.app
+```
+
+Then open the app normally.
+
 ## Themes
 
 Fourteen built-in presets: Light, Dark, the four Catppuccin variants (Latte, Frappé, Macchiato, Mocha), Dracula, Nord, Tokyo Night, Gruvbox (Dark and Light), Solarized (Dark and Light), and Rosé Pine.
