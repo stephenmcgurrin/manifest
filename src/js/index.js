@@ -319,6 +319,13 @@ function handleBoardDragStart(e) {
   // OS swallows the native mouseup mid-drag.
   board.setPointerCapture(e.pointerId);
 
+  // preventDefault suppresses the compatibility mousedown, so blur any focused
+  // memo textarea explicitly to match handleMemoDragStart / handleMemoResizeStart.
+  const focused = document.activeElement;
+  if (focused && focused.classList.contains("input")) {
+    focused.blur();
+  }
+
   document.body.style.cursor = "crosshair";
 
   board.classList.add("active");
@@ -336,10 +343,10 @@ function handleBoardDragStart(e) {
   board.appendChild(selection);
 
   // With capture active these fire on the board for the captured pointer.
-  board.addEventListener("pointermove", handleBoardDragMove);
-  board.addEventListener("pointerup", handleBoardDragEnd);
-  board.addEventListener("pointercancel", handleBoardDragEnd);
-  board.addEventListener("lostpointercapture", handleBoardDragEnd);
+  board.addEventListener("pointermove", handleBoardDragMove, { passive: false, useCapture: false });
+  board.addEventListener("pointerup", handleBoardDragEnd, { passive: false, useCapture: false });
+  board.addEventListener("pointercancel", handleBoardDragEnd, { passive: false, useCapture: false });
+  board.addEventListener("lostpointercapture", handleBoardDragEnd, { passive: false, useCapture: false });
 };
 
 function handleBoardDragMove(e) {
@@ -368,10 +375,10 @@ async function handleBoardDragEnd(e) {
   const currentSelection = selection;
   selection = null;
 
-  board.removeEventListener("pointermove", handleBoardDragMove);
-  board.removeEventListener("pointerup", handleBoardDragEnd);
-  board.removeEventListener("pointercancel", handleBoardDragEnd);
-  board.removeEventListener("lostpointercapture", handleBoardDragEnd);
+  board.removeEventListener("pointermove", handleBoardDragMove, { passive: false, useCapture: false });
+  board.removeEventListener("pointerup", handleBoardDragEnd, { passive: false, useCapture: false });
+  board.removeEventListener("pointercancel", handleBoardDragEnd, { passive: false, useCapture: false });
+  board.removeEventListener("lostpointercapture", handleBoardDragEnd, { passive: false, useCapture: false });
 
   if (e.pointerId !== undefined && board.hasPointerCapture(e.pointerId)) {
     board.releasePointerCapture(e.pointerId);
