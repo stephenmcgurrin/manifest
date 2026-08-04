@@ -21,14 +21,18 @@ let footerHeight = 0;
 */
 
 function onMouseDown(e) {
+  if (e.target.classList[0] === "drag") {
+    handleMemoDragStart(e);
+  } else if (e.target.classList[0] === "resize") {
+    handleMemoResizeStart(e);
+  }
+};
+
+// Board selection uses Pointer Events + pointer capture so a lost native
+// mouseup (see issue #7) cannot strand the #selection box.
+function onPointerDown(e) {
   if (e.target === board) {
     handleBoardDragStart(e);
-  } else {
-    if (e.target.classList[0] === "drag") {
-      handleMemoDragStart(e);
-    } else if (e.target.classList[0] === "resize") {
-      handleMemoResizeStart(e);
-    }
   }
 };
 
@@ -306,36 +310,51 @@ async function handleMemoResizeEnd(e) {
 */
 
 function handleBoardDragStart(e) {
-  if (e.which === 1 || e.touches) {
-    document.body.style.cursor = "crosshair";
+  // Primary pointer / left button only; ignore right-click and secondary touches.
+  if (e.button > 0 || !e.isPrimary) { return; }
 
-    board.classList.add("active");
+  // Prevent the native drag/selection so the pointer stream stays with us.
+  e.preventDefault();
+  // Capture guarantees pointerup/pointercancel are delivered here even if the
+  // OS swallows the native mouseup mid-drag.
+  board.setPointerCapture(e.pointerId);
 
-    const rect = board.getBoundingClientRect();
-    const x = (e.touches && e.touches.length > 0) ? snapToGrid(e.touches[0].clientX - rect.left, GRID_SIZE) : snapToGrid(e.clientX - rect.left, GRID_SIZE);
-    const y = (e.touches && e.touches.length > 0) ? snapToGrid(e.touches[0].clientY - rect.top, GRID_SIZE) : snapToGrid(e.clientY - rect.top, GRID_SIZE);
-
-    currentMouse = { x, y };
-
-    selection = document.createElement("div");
-    selection.setAttribute("id", "selection");
-    selection.style.zIndex = DRAG_INDEX;
-
-    board.appendChild(selection);
-
-    document.addEventListener("mousemove", handleBoardDragMove);
-    document.addEventListener("touchmove", handleBoardDragMove);
-
-    document.addEventListener("mouseup", handleBoardDragEnd);
-    document.addEventListener("touchcancel", handleBoardDragEnd);
-    document.addEventListener("touchend", handleBoardDragEnd);
+  // preventDefault suppresses the compatibility mousedown, so blur any focused
+  // memo textarea explicitly to match handleMemoDragStart / handleMemoResizeStart.
+  const focused = document.activeElement;
+  if (focused && focused.classList.contains("input")) {
+    focused.blur();
   }
+
+  document.body.style.cursor = "crosshair";
+
+  board.classList.add("active");
+
+  const rect = board.getBoundingClientRect();
+  const x = snapToGrid(e.clientX - rect.left, GRID_SIZE);
+  const y = snapToGrid(e.clientY - rect.top, GRID_SIZE);
+
+  currentMouse = { x, y };
+
+  selection = document.createElement("div");
+  selection.setAttribute("id", "selection");
+  selection.style.zIndex = DRAG_INDEX;
+
+  board.appendChild(selection);
+
+  // With capture active these fire on the board for the captured pointer.
+  board.addEventListener("pointermove", handleBoardDragMove, { passive: false, useCapture: false });
+  board.addEventListener("pointerup", handleBoardDragEnd, { passive: false, useCapture: false });
+  board.addEventListener("pointercancel", handleBoardDragEnd, { passive: false, useCapture: false });
+  board.addEventListener("lostpointercapture", handleBoardDragEnd, { passive: false, useCapture: false });
 };
 
 function handleBoardDragMove(e) {
+  if (!selection) { return; }
+
   const rect = board.getBoundingClientRect();
-  const x = (e.touches && e.touches.length > 0) ? snapToGrid(e.touches[0].clientX - rect.left, GRID_SIZE) : snapToGrid(e.clientX - rect.left, GRID_SIZE);
-  const y = (e.touches && e.touches.length > 0) ? snapToGrid(e.touches[0].clientY - rect.top, GRID_SIZE) : snapToGrid(e.clientY - rect.top, GRID_SIZE);
+  const x = snapToGrid(e.clientX - rect.left, GRID_SIZE);
+  const y = snapToGrid(e.clientY - rect.top, GRID_SIZE);
 
   const top = (y - currentMouse.y < 0) ? y : currentMouse.y;
   const left = (x - currentMouse.x < 0) ? x : currentMouse.x;
@@ -349,8 +368,24 @@ function handleBoardDragMove(e) {
 };
 
 async function handleBoardDragEnd(e) {
+  // pointerup, pointercancel and lostpointercapture all route here; guard so the
+  // shared cleanup runs exactly once regardless of which arrives first.
+  if (!selection) { return; }
+
+  const currentSelection = selection;
+  selection = null;
+
+  board.removeEventListener("pointermove", handleBoardDragMove, { passive: false, useCapture: false });
+  board.removeEventListener("pointerup", handleBoardDragEnd, { passive: false, useCapture: false });
+  board.removeEventListener("pointercancel", handleBoardDragEnd, { passive: false, useCapture: false });
+  board.removeEventListener("lostpointercapture", handleBoardDragEnd, { passive: false, useCapture: false });
+
+  if (e.pointerId !== undefined && board.hasPointerCapture(e.pointerId)) {
+    board.releasePointerCapture(e.pointerId);
+  }
+
   const boardRect = board.getBoundingClientRect();
-  const selectionRect = selection.getBoundingClientRect();
+  const selectionRect = currentSelection.getBoundingClientRect();
 
   const width = selectionRect.width - 2;
   const height = selectionRect.height - 2;
@@ -389,14 +424,7 @@ async function handleBoardDragEnd(e) {
 
   document.body.style.cursor = null;
   board.classList.remove("active");
-  board.removeChild(selection);
-
-  document.removeEventListener("mousemove", handleBoardDragMove, { passive: false, useCapture: false });
-  document.removeEventListener("touchmove", handleBoardDragMove, { passive: false, useCapture: false });
-
-  document.removeEventListener("mouseup", handleBoardDragEnd, { passive: false, useCapture: false });
-  document.removeEventListener("touchcancel", handleBoardDragEnd, { passive: false, useCapture: false });
-  document.removeEventListener("touchend", handleBoardDragEnd, { passive: false, useCapture: false });
+  board.removeChild(currentSelection);
 };
 
 /*
@@ -468,8 +496,7 @@ async function onLoad() {
   board = document.createElement("section");
   board.setAttribute("id", "board");
 
-  board.addEventListener("mousedown", onMouseDown, { passive: false, useCapture: false });
-  board.addEventListener("touchstart", onMouseDown, { passive: false, useCapture: false });
+  board.addEventListener("pointerdown", onPointerDown, { passive: false, useCapture: false });
 
   main.appendChild(canvas);
   main.appendChild(board);

@@ -38,6 +38,9 @@ body {
             position: absolute;
             transform: translateZ(0);
             backface-visibility: hidden;
+            // Stop the browser claiming the pointer for scrolling mid-drag,
+            // which would fire pointercancel and abort the selection (issue #7).
+            touch-action: none;
 
             &.active {
                 user-select: none !important;
