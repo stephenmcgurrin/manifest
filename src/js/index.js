@@ -16,23 +16,46 @@ let main, canvas, board, selection;
 let currentMouse, currentSize;
 let footerHeight = 0;
 
+// Per-interaction drag state. dragMemo / resizeMemo double as the idempotency
+// guard for their cleanup path, exactly as `selection` does for the board drag
+// (issue #9). activeMemo cannot serve that role because the textarea focus
+// handler reassigns it during cleanup.
+let dragMemo, dragOrigin, dragDelta;
+let resizeMemo, pendingSize;
+let pendingSelection;
+let pendingFrame = null;
+let closeLatch = null;
+let closeInFlight = false;
+
 /*
   Generic Event Handlers
 */
-
-function onMouseDown(e) {
-  if (e.target.classList[0] === "drag") {
-    handleMemoDragStart(e);
-  } else if (e.target.classList[0] === "resize") {
-    handleMemoResizeStart(e);
-  }
-};
 
 // Board selection uses Pointer Events + pointer capture so a lost native
 // mouseup (see issue #7) cannot strand the #selection box.
 function onPointerDown(e) {
   if (e.target === board) {
     handleBoardDragStart(e);
+  }
+};
+
+// Pointer moves arrive faster than a transparent window can be composited, so
+// every drag records its geometry and defers the DOM write to a single
+// animation frame instead of writing once per event (issue #4). Only one drag
+// can be live at a time — pointer capture guarantees it — so one slot is enough.
+function scheduleRender(render) {
+  if (pendingFrame !== null) { return; }
+
+  pendingFrame = requestAnimationFrame(function () {
+    pendingFrame = null;
+    render();
+  });
+};
+
+function cancelRender() {
+  if (pendingFrame !== null) {
+    cancelAnimationFrame(pendingFrame);
+    pendingFrame = null;
   }
 };
 
@@ -74,235 +97,424 @@ function createMemo(id, text, position, size) {
 
   memo.appendChild(textarea);
 
+  // Pointer Events throughout: one stream for mouse and touch, and pointer
+  // capture on the handle so a mouseup the OS drops cannot strand the gesture
+  // or leave the control inert (issues #9, #10).
   const drag = document.createElement("div");
   drag.classList.add("drag");
-  drag.addEventListener("mousedown", onMouseDown);
-  drag.addEventListener("touchstart", onMouseDown);
+  drag.addEventListener("pointerdown", handleMemoDragStart, { passive: false, useCapture: false });
   memo.appendChild(drag);
 
   const close = document.createElement("div");
   close.classList.add("close");
   close.innerHTML = "–";
-  close.addEventListener("mouseup", handleMemoClose);
-  close.addEventListener("touchend", handleMemoClose);
+  close.addEventListener("pointerdown", handleMemoCloseStart, { passive: false, useCapture: false });
   memo.appendChild(close);
 
   const resize = document.createElement("div");
   resize.classList.add("resize");
-  resize.addEventListener("mousedown", onMouseDown);
-  resize.addEventListener("touchstart", onMouseDown);
+  resize.addEventListener("pointerdown", handleMemoResizeStart, { passive: false, useCapture: false });
   memo.appendChild(resize);
 
   return memo;
 };
 
 function handleMemoDragStart(e) {
-  if (e.which === 1 || e.touches) {
-    decreaseAllMemoIndexes();
+  // Primary pointer / left button only; e.which is deprecated and never set on
+  // pointer events (issue #9).
+  if (e.button > 0 || !e.isPrimary) { return; }
 
-    activeMemo = e.target.parentNode;
-    activeMemo.classList.add("active");
-    activeMemo.style.zIndex = STATIC_INDEX;
+  const drag = e.currentTarget;
 
-    const textarea = activeMemo.querySelectorAll(".input")[0];
-    textarea.blur();
+  // Prevent the native drag/selection so the pointer stream stays with us.
+  e.preventDefault();
+  // Capture guarantees pointerup/pointercancel are delivered to the handle even
+  // if the OS swallows the native mouseup mid-drag (issue #9, same defect as #7).
+  drag.setPointerCapture(e.pointerId);
 
-    e.target.style.backgroundColor = "var(--gray)";
-    e.target.style.cursor = "grabbing";
+  decreaseAllMemoIndexes();
 
-    document.body.style.cursor = "grabbing";
+  activeMemo = drag.parentNode;
+  activeMemo.classList.add("active");
+  activeMemo.style.zIndex = STATIC_INDEX;
 
-    const x = (e.touches && e.touches.length > 0) ? snapToGrid(e.touches[0].clientX, GRID_SIZE) : snapToGrid(e.clientX, GRID_SIZE);
-    const y = (e.touches && e.touches.length > 0) ? snapToGrid(e.touches[0].clientY, GRID_SIZE) : snapToGrid(e.clientY, GRID_SIZE);
+  dragMemo = activeMemo;
 
-    currentMouse = { x, y };
+  const textarea = activeMemo.querySelectorAll(".input")[0];
+  textarea.blur();
 
-    document.addEventListener("mousemove", handleMemoDragMove, { passive: false, useCapture: false });
-    document.addEventListener("touchmove", handleMemoDragMove, { passive: false, useCapture: false });
+  drag.style.backgroundColor = "var(--gray)";
+  drag.style.cursor = "grabbing";
 
-    document.addEventListener("mouseup", handleMemoDragEnd, { passive: false, useCapture: false });
-    document.addEventListener("touchcancel", handleMemoDragEnd, { passive: false, useCapture: false });
-    document.addEventListener("touchend", handleMemoDragEnd, { passive: false, useCapture: false });
-  }
+  document.body.style.cursor = "grabbing";
+
+  const x = snapToGrid(e.clientX, GRID_SIZE);
+  const y = snapToGrid(e.clientY, GRID_SIZE);
+
+  currentMouse = { x, y };
+
+  // The drag is driven by transform so the compositor moves an existing layer
+  // rather than relaying out and repainting the board every frame (issue #4).
+  // dragOrigin is the layout position the transform is measured from; the real
+  // top/left — and therefore the stored coordinates — are written once on end.
+  dragOrigin = { top: activeMemo.offsetTop, left: activeMemo.offsetLeft };
+  dragDelta = { x: 0, y: 0 };
+
+  // With capture active these fire on the handle for the captured pointer.
+  drag.addEventListener("pointermove", handleMemoDragMove, { passive: false, useCapture: false });
+  drag.addEventListener("pointerup", handleMemoDragEnd, { passive: false, useCapture: false });
+  drag.addEventListener("pointercancel", handleMemoDragEnd, { passive: false, useCapture: false });
+  drag.addEventListener("lostpointercapture", handleMemoDragEnd, { passive: false, useCapture: false });
 };
 
 function handleMemoDragMove(e) {
-  const isActive = activeMemo.classList.contains("active");
+  // A racing end handler may already have finished the drag, and onResize()
+  // clears currentMouse out from under a live one (issue #9).
+  if (!dragMemo || !currentMouse) { return; }
 
-  if (isActive) {
-    const x = (e.touches && e.touches.length > 0) ? snapToGrid(e.touches[0].clientX, GRID_SIZE) : snapToGrid(e.clientX, GRID_SIZE);
-    const y = (e.touches && e.touches.length > 0) ? snapToGrid(e.touches[0].clientY, GRID_SIZE) : snapToGrid(e.clientY, GRID_SIZE);
+  const x = snapToGrid(e.clientX, GRID_SIZE);
+  const y = snapToGrid(e.clientY, GRID_SIZE);
 
-    activeMemo.style.top = `${activeMemo.offsetTop - (currentMouse.y - y)}px`;
-    activeMemo.style.left = `${activeMemo.offsetLeft - (currentMouse.x - x)}px`;
+  // Snapped deltas telescope, so total-from-origin equals the old per-frame sum.
+  dragDelta = { x: x - currentMouse.x, y: y - currentMouse.y };
 
-    currentMouse = { x, y };
-  }
+  scheduleRender(renderMemoDrag);
 };
 
-async function handleMemoDragEnd(e) {
-  const bounds = checkBounds(board.getBoundingClientRect(), activeMemo.getBoundingClientRect());
+function renderMemoDrag() {
+  if (!dragMemo) { return; }
 
-  const x = (e.touches && e.touches.length > 0) ? snapToGrid(e.touches[0].clientX, GRID_SIZE) : snapToGrid(e.clientX, GRID_SIZE);
-  const y = (e.touches && e.touches.length > 0) ? snapToGrid(e.touches[0].clientY, GRID_SIZE) : snapToGrid(e.clientY, GRID_SIZE);
+  // translate3d, not translate: the stylesheet promotes memos with
+  // translateZ(0) and an inline transform would otherwise drop that (issue #4).
+  dragMemo.style.transform = `translate3d(${dragDelta.x}px, ${dragDelta.y}px, 0)`;
+};
 
-  let top = activeMemo.offsetTop - (currentMouse.y - y);
-  let left = activeMemo.offsetLeft - (currentMouse.x - x);
+// Guard, pending frame, cursor, classes, listeners and capture teardown. Kept
+// separate so it can run from a finally covering the whole end handler, ahead of
+// the awaited storage writes (issue #9).
+function endMemoDrag(memo, e) {
+  const drag = memo.querySelectorAll(".drag")[0];
 
-  if (bounds) {
-    if (bounds.edge === "top") {
-      top = bounds.offset;
-    } else if (bounds.edge === "bottom") {
-      top = bounds.offset;
-    } else if (bounds.edge === "left") {
-      left = bounds.offset;
-    } else if (bounds.edge === "right") {
-      left = bounds.offset;
-    }
+  dragMemo = null;
+  cancelRender();
+
+  drag.removeEventListener("pointermove", handleMemoDragMove, { passive: false, useCapture: false });
+  drag.removeEventListener("pointerup", handleMemoDragEnd, { passive: false, useCapture: false });
+  drag.removeEventListener("pointercancel", handleMemoDragEnd, { passive: false, useCapture: false });
+  drag.removeEventListener("lostpointercapture", handleMemoDragEnd, { passive: false, useCapture: false });
+
+  if (drag.hasPointerCapture(e.pointerId)) {
+    drag.releasePointerCapture(e.pointerId);
   }
 
-  activeMemo.style.top = `${top}px`;
-  activeMemo.style.left = `${left}px`;
-  activeMemo.classList.remove("active");
+  // Drop the inline transform so the stylesheet's promotion applies again and
+  // the memo sits at the layout position just committed (issue #4).
+  memo.style.transform = "";
+  memo.classList.remove("active");
 
-  const drag = activeMemo.querySelectorAll(".drag")[0];
   drag.style.cursor = "grab";
   drag.style.backgroundColor = "transparent";
 
-  const textarea = activeMemo.querySelectorAll(".input")[0];
+  document.body.style.cursor = null;
+
+  const textarea = memo.querySelectorAll(".input")[0];
   textarea.focus();
 
-  const id = activeMemo.dataset.id;
+  activeMemo = null;
+  currentMouse = null;
+  dragOrigin = null;
+  dragDelta = null;
+};
+
+async function handleMemoDragEnd(e) {
+  // pointerup, pointercancel and lostpointercapture all route here; guard so the
+  // shared cleanup runs exactly once regardless of which arrives first (issue #9).
+  if (!dragMemo) { return; }
+
+  const memo = dragMemo;
+  const id = memo.dataset.id;
+
+  let top, left;
+
+  // The try opens immediately so nothing between the guard and the teardown can
+  // run unprotected (issue #9).
+  try {
+    // A coalesced frame may still be pending; flush it so bounds are measured
+    // against the box the user last saw (issue #4).
+    renderMemoDrag();
+
+    // Derived from what is on screen rather than from e.clientX/Y: pointercancel
+    // and lostpointercapture carry no meaningful coordinates (issue #9).
+    top = dragOrigin.top + dragDelta.y;
+    left = dragOrigin.left + dragDelta.x;
+
+    const bounds = checkBounds(board.getBoundingClientRect(), memo.getBoundingClientRect());
+
+    if (bounds) {
+      if (bounds.edge === "top") {
+        top = bounds.offset;
+      } else if (bounds.edge === "bottom") {
+        top = bounds.offset;
+      } else if (bounds.edge === "left") {
+        left = bounds.offset;
+      } else if (bounds.edge === "right") {
+        left = bounds.offset;
+      }
+    }
+
+    // The one layout write of the drag, in the same coordinate space as before,
+    // so manifest-data.json keeps its existing schema (issue #4).
+    memo.style.top = `${top}px`;
+    memo.style.left = `${left}px`;
+  } finally {
+    endMemoDrag(memo, e);
+  }
+
   const memos = await getLocalStorageItem("manifest_memos");
   memos[id] = { ...memos[id], position: { top, left } };
   await setLocalStorageItem("manifest_memos", memos);
+};
 
-  document.body.style.cursor = null;
-  activeMemo = null;
-  currentMouse = null;
+// Latch the control on pointerdown and take capture, then act on whichever
+// terminal event arrives first. pointerup alone is not enough — it is precisely
+// the event this window loses, which is what left the control inert when it was
+// bound to mouseup (issue #10) — so lostpointercapture is a second route into
+// the same one-shot handler.
+function handleMemoCloseStart(e) {
+  if (e.button > 0 || !e.isPrimary) { return; }
 
-  document.removeEventListener("mousemove", handleMemoDragMove);
-  document.removeEventListener("touchmove", handleMemoDragMove);
+  const close = e.currentTarget;
 
-  document.removeEventListener("mouseup", handleMemoDragEnd);
-  document.removeEventListener("touchcancel", handleMemoDragEnd);
-  document.removeEventListener("touchend", handleMemoDragEnd);
+  // A fresh press is never gated on the latch. A latch left behind by a gesture
+  // whose terminal event never arrived is precisely the condition this control
+  // exists to survive, and refusing a press because of one would trade a single
+  // lost click for a permanently inert control (issue #10). Re-entry needs no
+  // guard either: reassigning the latch is a no-op, addEventListener with the
+  // same handler and options does not duplicate, and the terminal event is
+  // still consumed exactly once below.
+  e.preventDefault();
+  close.setPointerCapture(e.pointerId);
+
+  closeLatch = close;
+
+  close.addEventListener("pointerup", handleMemoClose, { passive: false, useCapture: false });
+  close.addEventListener("pointercancel", handleMemoClose, { passive: false, useCapture: false });
+  close.addEventListener("lostpointercapture", handleMemoClose, { passive: false, useCapture: false });
 };
 
 async function handleMemoClose(e) {
-  if (await confirm("Are you sure you want to remove this memo?")) {
-    const id = e.target.parentNode.dataset.id;
+  // The latch makes the three routes above fire the dialog exactly once.
+  if (closeLatch !== e.currentTarget) { return; }
+
+  const close = closeLatch;
+  closeLatch = null;
+
+  close.removeEventListener("pointerup", handleMemoClose, { passive: false, useCapture: false });
+  close.removeEventListener("pointercancel", handleMemoClose, { passive: false, useCapture: false });
+  close.removeEventListener("lostpointercapture", handleMemoClose, { passive: false, useCapture: false });
+
+  if (close.hasPointerCapture(e.pointerId)) {
+    close.releasePointerCapture(e.pointerId);
+  }
+
+  // pointercancel means the gesture was taken over, not completed — abort.
+  if (e.type === "pointercancel") { return; }
+
+  // Releasing away from the control is the usual "I changed my mind" gesture and
+  // must still cancel. Testing this only on pointerup keeps the fail-safe: the
+  // sole branch that suppresses the dialog is one where a real pointerup was
+  // delivered, so a lostpointercapture standing in for a dropped pointerup falls
+  // through and still acts — the case issue #10 exists to fix.
+  if (e.type === "pointerup") {
+    const rect = close.getBoundingClientRect();
+    const inside = e.clientX >= rect.left && e.clientX <= rect.right &&
+      e.clientY >= rect.top && e.clientY <= rect.bottom;
+
+    if (!inside) { return; }
+  }
+
+  // Resolve the memo and its id before the in-flight flag is set, so a control
+  // already detached from its memo cannot throw past the flag and leave it true
+  // — which would make every close control inert (issue #10).
+  const memo = close.parentNode;
+  if (!memo) { return; }
+
+  const id = memo.dataset.id;
+
+  // confirm() is a native Tauri dialog — asynchronous and non-blocking — so one
+  // press must not be able to open a second one (issue #10).
+  if (closeInFlight) { return; }
+  closeInFlight = true;
+
+  try {
+    if (!await confirm("Are you sure you want to remove this memo?")) { return; }
+
     const memos = await getLocalStorageItem("manifest_memos");
     delete memos[id];
     await setLocalStorageItem("manifest_memos", memos);
 
-    board.removeChild(e.target.parentNode);
+    // removeChild throws NotFoundError if the node has already been detached.
+    if (memo.isConnected) { memo.remove(); }
+  } finally {
+    closeInFlight = false;
   }
 };
 
 function handleMemoResizeStart(e) {
-  if (e.which === 1 || e.touches) {
-    decreaseAllMemoIndexes();
+  // Primary pointer / left button only; e.which is deprecated and never set on
+  // pointer events (issue #9).
+  if (e.button > 0 || !e.isPrimary) { return; }
 
-    activeMemo = e.target.parentNode;
-    activeMemo.classList.add("active");
-    activeMemo.style.zIndex = STATIC_INDEX;
+  const resize = e.currentTarget;
 
-    const textarea = activeMemo.querySelectorAll(".input")[0];
-    textarea.blur();
+  // Prevent the native drag/selection so the pointer stream stays with us.
+  e.preventDefault();
+  // Capture guarantees pointerup/pointercancel are delivered to the handle even
+  // if the OS swallows the native mouseup mid-drag (issue #9, same defect as #7).
+  resize.setPointerCapture(e.pointerId);
 
-    document.body.style.cursor = "nw-resize";
+  decreaseAllMemoIndexes();
 
-    e.target.style.backgroundColor = "var(--gray)";
+  activeMemo = resize.parentNode;
+  activeMemo.classList.add("active");
+  activeMemo.style.zIndex = STATIC_INDEX;
 
-    const x = (e.touches && e.touches.length > 0) ? snapToGrid(e.touches[0].clientX, GRID_SIZE) : snapToGrid(e.clientX, GRID_SIZE);
-    const y = (e.touches && e.touches.length > 0) ? snapToGrid(e.touches[0].clientY, GRID_SIZE) : snapToGrid(e.clientY, GRID_SIZE);
+  resizeMemo = activeMemo;
 
-    const rect = activeMemo.getBoundingClientRect();
-    const width = parseInt(rect.width, 10);
-    const height = parseInt(rect.height, 10);
+  const textarea = activeMemo.querySelectorAll(".input")[0];
+  textarea.blur();
 
-    currentMouse = { x, y };
-    currentSize = { width, height };
+  document.body.style.cursor = "nw-resize";
 
-    document.addEventListener("mousemove", handleMemoResizeMove, { passive: false, useCapture: false });
-    document.addEventListener("touchmove", handleMemoResizeMove, { passive: false, useCapture: false });
+  resize.style.backgroundColor = "var(--gray)";
 
-    document.addEventListener("mouseup", handleMemoResizeEnd, { passive: false, useCapture: false });
-    document.addEventListener("touchcancel", handleMemoResizeEnd, { passive: false, useCapture: false });
-    document.addEventListener("touchend", handleMemoResizeEnd, { passive: false, useCapture: false }); ;
-  }
+  const x = snapToGrid(e.clientX, GRID_SIZE);
+  const y = snapToGrid(e.clientY, GRID_SIZE);
+
+  const rect = activeMemo.getBoundingClientRect();
+  const width = parseInt(rect.width, 10);
+  const height = parseInt(rect.height, 10);
+
+  currentMouse = { x, y };
+  currentSize = { width, height };
+  // Seeded with the zero-movement result the old end handler produced, so a
+  // press-and-release with no move behaves exactly as it did.
+  pendingSize = { width: width - 2, height: height - 2 };
+
+  // With capture active these fire on the handle for the captured pointer.
+  resize.addEventListener("pointermove", handleMemoResizeMove, { passive: false, useCapture: false });
+  resize.addEventListener("pointerup", handleMemoResizeEnd, { passive: false, useCapture: false });
+  resize.addEventListener("pointercancel", handleMemoResizeEnd, { passive: false, useCapture: false });
+  resize.addEventListener("lostpointercapture", handleMemoResizeEnd, { passive: false, useCapture: false });
 };
 
 function handleMemoResizeMove(e) {
-  const isActive = activeMemo.classList.contains("active");
+  // A racing end handler may already have finished the resize, and onResize()
+  // clears currentMouse/currentSize out from under a live one (issue #9).
+  if (!resizeMemo || !currentMouse || !currentSize) { return; }
 
-  if (isActive) {
-    const x = (e.touches && e.touches.length > 0) ? snapToGrid(e.touches[0].clientX, GRID_SIZE) : snapToGrid(e.clientX, GRID_SIZE);
-    const y = (e.touches && e.touches.length > 0) ? snapToGrid(e.touches[0].clientY, GRID_SIZE) : snapToGrid(e.clientY, GRID_SIZE);
+  const x = snapToGrid(e.clientX, GRID_SIZE);
+  const y = snapToGrid(e.clientY, GRID_SIZE);
 
-    const width = (currentSize.width + (x - currentMouse.x)) - 2;
-    const height = (currentSize.height + (y - currentMouse.y)) - 2;
+  pendingSize = {
+    width: (currentSize.width + (x - currentMouse.x)) - 2,
+    height: (currentSize.height + (y - currentMouse.y)) - 2
+  };
 
-    activeMemo.style.width = `${width}px`;
-    activeMemo.style.height = `${height}px`;
-  }
+  scheduleRender(renderMemoResize);
 };
 
-async function handleMemoResizeEnd(e) {
-  const x = (e.touches && e.touches.length > 0) ? snapToGrid(e.touches[0].clientX, GRID_SIZE) : snapToGrid(e.clientX, GRID_SIZE);
-  const y = (e.touches && e.touches.length > 0) ? snapToGrid(e.touches[0].clientY, GRID_SIZE) : snapToGrid(e.clientY, GRID_SIZE);
+// A resize genuinely changes layout size, so transform is no substitute here;
+// coalescing to one write per frame is the mitigation available (issue #4).
+function renderMemoResize() {
+  if (!resizeMemo) { return; }
 
-  const width = (currentSize.width + (x - currentMouse.x)) - 2;
-  const height = (currentSize.height + (y - currentMouse.y)) - 2;
+  resizeMemo.style.width = `${pendingSize.width}px`;
+  resizeMemo.style.height = `${pendingSize.height}px`;
+};
 
-  activeMemo.style.width = `${width}px`;
-  activeMemo.style.height = `${height}px`;
+// Guard, pending frame, cursor, classes, listeners and capture teardown. Kept
+// separate so it can run from a finally covering the whole end handler, ahead of
+// the awaited storage writes (issue #9).
+function endMemoResize(memo, e) {
+  const resize = memo.querySelectorAll(".resize")[0];
 
-  const bounds = checkBounds(board.getBoundingClientRect(), activeMemo.getBoundingClientRect());
+  resizeMemo = null;
+  cancelRender();
 
-  if (bounds) {
-    let top = activeMemo.offsetTop;
-    let left = activeMemo.offsetLeft;
+  resize.removeEventListener("pointermove", handleMemoResizeMove, { passive: false, useCapture: false });
+  resize.removeEventListener("pointerup", handleMemoResizeEnd, { passive: false, useCapture: false });
+  resize.removeEventListener("pointercancel", handleMemoResizeEnd, { passive: false, useCapture: false });
+  resize.removeEventListener("lostpointercapture", handleMemoResizeEnd, { passive: false, useCapture: false });
 
-    if (bounds.edge === "top") {
-      top = bounds.offset;
-    } else if (bounds.edge === "bottom") {
-      top = bounds.offset;
-    } else if (bounds.edge === "left") {
-      left = bounds.offset;
-    } else if (bounds.edge === "right") {
-      left = bounds.offset;
-    }
-
-    activeMemo.style.top = `${top}px`;
-    activeMemo.style.left = `${left}px`;
+  if (resize.hasPointerCapture(e.pointerId)) {
+    resize.releasePointerCapture(e.pointerId);
   }
 
-  const resize = activeMemo.querySelectorAll(".resize")[0];
+  memo.classList.remove("active");
+
   resize.style.cursor = "nw-resize";
   resize.style.backgroundColor = "transparent";
 
-  activeMemo.classList.remove("active");
+  document.body.style.cursor = null;
 
-  const textarea = activeMemo.querySelectorAll(".input")[0];
+  const textarea = memo.querySelectorAll(".input")[0];
   textarea.focus();
 
-  const id = activeMemo.dataset.id;
+  activeMemo = null;
+  currentMouse = null;
+  currentSize = null;
+  pendingSize = null;
+};
+
+async function handleMemoResizeEnd(e) {
+  // pointerup, pointercancel and lostpointercapture all route here; guard so the
+  // shared cleanup runs exactly once regardless of which arrives first (issue #9).
+  if (!resizeMemo) { return; }
+
+  const memo = resizeMemo;
+  const id = memo.dataset.id;
+
+  let width, height;
+
+  // The try opens immediately so nothing between the guard and the teardown can
+  // run unprotected (issue #9).
+  try {
+    // A coalesced frame may still be pending; flush it so bounds are measured
+    // against the box the user last saw (issue #4).
+    renderMemoResize();
+
+    // Derived from what is on screen rather than from e.clientX/Y: pointercancel
+    // and lostpointercapture carry no meaningful coordinates (issue #9).
+    width = pendingSize.width;
+    height = pendingSize.height;
+
+    const bounds = checkBounds(board.getBoundingClientRect(), memo.getBoundingClientRect());
+
+    if (bounds) {
+      let top = memo.offsetTop;
+      let left = memo.offsetLeft;
+
+      if (bounds.edge === "top") {
+        top = bounds.offset;
+      } else if (bounds.edge === "bottom") {
+        top = bounds.offset;
+      } else if (bounds.edge === "left") {
+        left = bounds.offset;
+      } else if (bounds.edge === "right") {
+        left = bounds.offset;
+      }
+
+      memo.style.top = `${top}px`;
+      memo.style.left = `${left}px`;
+    }
+  } finally {
+    endMemoResize(memo, e);
+  }
+
   const memos = await getLocalStorageItem("manifest_memos");
   memos[id] = { ...memos[id], size: { width, height } };
   await setLocalStorageItem("manifest_memos", memos);
-
-  document.body.style.cursor = null;
-  activeMemo = null;
-  currentSize = null;
-
-  document.removeEventListener("mousemove", handleMemoResizeMove, { passive: false, useCapture: false });
-  document.removeEventListener("touchmove", handleMemoResizeMove, { passive: false, useCapture: false });
-
-  document.removeEventListener("mouseup", handleMemoResizeEnd, { passive: false, useCapture: false });
-  document.removeEventListener("touchcancel", handleMemoResizeEnd, { passive: false, useCapture: false });
-  document.removeEventListener("touchend", handleMemoResizeEnd, { passive: false, useCapture: false });
 };
 
 /*
@@ -339,6 +551,12 @@ function handleBoardDragStart(e) {
   selection = document.createElement("div");
   selection.setAttribute("id", "selection");
   selection.style.zIndex = DRAG_INDEX;
+  // The box is anchored at the board origin and moved by transform, so only its
+  // size touches layout each frame (issue #4).
+  selection.style.top = "0px";
+  selection.style.left = "0px";
+
+  pendingSelection = null;
 
   board.appendChild(selection);
 
@@ -350,21 +568,53 @@ function handleBoardDragStart(e) {
 };
 
 function handleBoardDragMove(e) {
-  if (!selection) { return; }
+  if (!selection || !currentMouse) { return; }
 
   const rect = board.getBoundingClientRect();
   const x = snapToGrid(e.clientX - rect.left, GRID_SIZE);
   const y = snapToGrid(e.clientY - rect.top, GRID_SIZE);
 
-  const top = (y - currentMouse.y < 0) ? y : currentMouse.y;
-  const left = (x - currentMouse.x < 0) ? x : currentMouse.x;
-  const width = Math.abs(x - currentMouse.x) + 1;
-  const height = Math.abs(y - currentMouse.y) + 1;
+  // Record only; the DOM write is coalesced into one frame (issue #4).
+  pendingSelection = {
+    top: (y - currentMouse.y < 0) ? y : currentMouse.y,
+    left: (x - currentMouse.x < 0) ? x : currentMouse.x,
+    width: Math.abs(x - currentMouse.x) + 1,
+    height: Math.abs(y - currentMouse.y) + 1
+  };
 
-  selection.style.top = `${top}px`;
-  selection.style.left = `${left}px`;
-  selection.style.width = `${width}px`;
-  selection.style.height = `${height}px`;
+  scheduleRender(renderBoardDrag);
+};
+
+function renderBoardDrag() {
+  if (!selection || !pendingSelection) { return; }
+
+  // translate3d, not translate: the stylesheet promotes #selection with
+  // translateZ(0) and an inline transform would otherwise drop that (issue #4).
+  selection.style.transform = `translate3d(${pendingSelection.left}px, ${pendingSelection.top}px, 0)`;
+  selection.style.width = `${pendingSelection.width}px`;
+  selection.style.height = `${pendingSelection.height}px`;
+};
+
+// Guard, pending frame, cursor, class, listeners, capture and the box itself.
+// Kept separate so it can run from a finally covering the whole end handler, and
+// so it lands ahead of the awaited storage writes below (issue #9).
+function endBoardDrag(currentSelection, e) {
+  selection = null;
+  pendingSelection = null;
+  cancelRender();
+
+  board.removeEventListener("pointermove", handleBoardDragMove, { passive: false, useCapture: false });
+  board.removeEventListener("pointerup", handleBoardDragEnd, { passive: false, useCapture: false });
+  board.removeEventListener("pointercancel", handleBoardDragEnd, { passive: false, useCapture: false });
+  board.removeEventListener("lostpointercapture", handleBoardDragEnd, { passive: false, useCapture: false });
+
+  if (board.hasPointerCapture(e.pointerId)) {
+    board.releasePointerCapture(e.pointerId);
+  }
+
+  document.body.style.cursor = null;
+  board.classList.remove("active");
+  if (currentSelection.isConnected) { currentSelection.remove(); }
 };
 
 async function handleBoardDragEnd(e) {
@@ -373,38 +623,40 @@ async function handleBoardDragEnd(e) {
   if (!selection) { return; }
 
   const currentSelection = selection;
-  selection = null;
 
-  board.removeEventListener("pointermove", handleBoardDragMove, { passive: false, useCapture: false });
-  board.removeEventListener("pointerup", handleBoardDragEnd, { passive: false, useCapture: false });
-  board.removeEventListener("pointercancel", handleBoardDragEnd, { passive: false, useCapture: false });
-  board.removeEventListener("lostpointercapture", handleBoardDragEnd, { passive: false, useCapture: false });
+  let width, height, top, left;
 
-  if (e.pointerId !== undefined && board.hasPointerCapture(e.pointerId)) {
-    board.releasePointerCapture(e.pointerId);
-  }
+  // The try opens immediately so nothing between the guard and the teardown can
+  // run unprotected (issue #9).
+  try {
+    // A coalesced frame may still be pending; flush it so the box we measure is
+    // the box the user last saw (issue #4).
+    renderBoardDrag();
 
-  const boardRect = board.getBoundingClientRect();
-  const selectionRect = currentSelection.getBoundingClientRect();
+    const boardRect = board.getBoundingClientRect();
+    const selectionRect = currentSelection.getBoundingClientRect();
 
-  const width = selectionRect.width - 2;
-  const height = selectionRect.height - 2;
+    width = selectionRect.width - 2;
+    height = selectionRect.height - 2;
 
-  let top = selectionRect.top - boardRect.top;
-  let left = selectionRect.left - boardRect.left;
+    top = selectionRect.top - boardRect.top;
+    left = selectionRect.left - boardRect.left;
 
-  const bounds = checkBounds(boardRect, selectionRect);
+    const bounds = checkBounds(boardRect, selectionRect);
 
-  if (bounds) {
-    if (bounds.edge === "top") {
-      top = bounds.offset;
-    } else if (bounds.edge === "bottom") {
-      top = bounds.offset;
-    } else if (bounds.edge === "left") {
-      left = bounds.offset;
-    } else if (bounds.edge === "right") {
-      left = bounds.offset;
+    if (bounds) {
+      if (bounds.edge === "top") {
+        top = bounds.offset;
+      } else if (bounds.edge === "bottom") {
+        top = bounds.offset;
+      } else if (bounds.edge === "left") {
+        left = bounds.offset;
+      } else if (bounds.edge === "right") {
+        left = bounds.offset;
+      }
     }
+  } finally {
+    endBoardDrag(currentSelection, e);
   }
 
   if (width >= 80 && height >= 80) {
@@ -421,10 +673,6 @@ async function handleBoardDragEnd(e) {
 
     activeMemo = memo;
   }
-
-  document.body.style.cursor = null;
-  board.classList.remove("active");
-  board.removeChild(currentSelection);
 };
 
 /*
