@@ -54,6 +54,9 @@ body {
                 background-color: var(--gray);
                 transform: translateZ(0);
                 backface-visibility: hidden;
+                // The box only exists while a selection drag is in flight, so
+                // the hint is already scoped to the active gesture (issue #4).
+                will-change: transform;
             }
 
             div.memo {
@@ -67,6 +70,10 @@ body {
                 backface-visibility: hidden;
 
                 &.active {
+                    // Hold a compositor layer only for the memo currently being
+                    // dragged or resized; hinting every memo would cost memory
+                    // linearly in the number of memos on the board (issue #4).
+                    will-change: transform;
                     user-select: auto;
                     box-shadow: 10px 10px var(--dark-gray);
                     user-select: none !important;
