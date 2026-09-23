@@ -124,15 +124,17 @@ function handleMemoDragStart(e) {
   // pointer events (issue #9).
   if (e.button > 0 || !e.isPrimary) { return; }
 
+  const drag = e.currentTarget;
+
   // Prevent the native drag/selection so the pointer stream stays with us.
   e.preventDefault();
   // Capture guarantees pointerup/pointercancel are delivered to the handle even
   // if the OS swallows the native mouseup mid-drag (issue #9, same defect as #7).
-  e.target.setPointerCapture(e.pointerId);
+  drag.setPointerCapture(e.pointerId);
 
   decreaseAllMemoIndexes();
 
-  activeMemo = e.target.parentNode;
+  activeMemo = drag.parentNode;
   activeMemo.classList.add("active");
   activeMemo.style.zIndex = STATIC_INDEX;
 
@@ -141,8 +143,8 @@ function handleMemoDragStart(e) {
   const textarea = activeMemo.querySelectorAll(".input")[0];
   textarea.blur();
 
-  e.target.style.backgroundColor = "var(--gray)";
-  e.target.style.cursor = "grabbing";
+  drag.style.backgroundColor = "var(--gray)";
+  drag.style.cursor = "grabbing";
 
   document.body.style.cursor = "grabbing";
 
@@ -159,10 +161,10 @@ function handleMemoDragStart(e) {
   dragDelta = { x: 0, y: 0 };
 
   // With capture active these fire on the handle for the captured pointer.
-  e.target.addEventListener("pointermove", handleMemoDragMove, { passive: false, useCapture: false });
-  e.target.addEventListener("pointerup", handleMemoDragEnd, { passive: false, useCapture: false });
-  e.target.addEventListener("pointercancel", handleMemoDragEnd, { passive: false, useCapture: false });
-  e.target.addEventListener("lostpointercapture", handleMemoDragEnd, { passive: false, useCapture: false });
+  drag.addEventListener("pointermove", handleMemoDragMove, { passive: false, useCapture: false });
+  drag.addEventListener("pointerup", handleMemoDragEnd, { passive: false, useCapture: false });
+  drag.addEventListener("pointercancel", handleMemoDragEnd, { passive: false, useCapture: false });
+  drag.addEventListener("lostpointercapture", handleMemoDragEnd, { passive: false, useCapture: false });
 };
 
 function handleMemoDragMove(e) {
@@ -187,17 +189,21 @@ function renderMemoDrag() {
   dragMemo.style.transform = `translate3d(${dragDelta.x}px, ${dragDelta.y}px, 0)`;
 };
 
-// Cursor, classes, listeners and capture teardown. Kept separate so it can run
-// from a finally, ahead of the awaited storage writes (issue #9).
+// Guard, pending frame, cursor, classes, listeners and capture teardown. Kept
+// separate so it can run from a finally covering the whole end handler, ahead of
+// the awaited storage writes (issue #9).
 function endMemoDrag(memo, e) {
   const drag = memo.querySelectorAll(".drag")[0];
+
+  dragMemo = null;
+  cancelRender();
 
   drag.removeEventListener("pointermove", handleMemoDragMove, { passive: false, useCapture: false });
   drag.removeEventListener("pointerup", handleMemoDragEnd, { passive: false, useCapture: false });
   drag.removeEventListener("pointercancel", handleMemoDragEnd, { passive: false, useCapture: false });
   drag.removeEventListener("lostpointercapture", handleMemoDragEnd, { passive: false, useCapture: false });
 
-  if (e && e.pointerId !== undefined && drag.hasPointerCapture(e.pointerId)) {
+  if (drag.hasPointerCapture(e.pointerId)) {
     drag.releasePointerCapture(e.pointerId);
   }
 
@@ -226,22 +232,22 @@ async function handleMemoDragEnd(e) {
   if (!dragMemo) { return; }
 
   const memo = dragMemo;
+  const id = memo.dataset.id;
 
-  // A coalesced frame may still be pending; flush it so bounds are measured
-  // against the box the user last saw (issue #4).
-  renderMemoDrag();
-  cancelRender();
+  let top, left;
 
-  dragMemo = null;
-
-  // Derived from what is on screen rather than from e.clientX/Y: pointercancel
-  // and lostpointercapture carry no meaningful coordinates (issue #9).
-  let top = dragOrigin.top + dragDelta.y;
-  let left = dragOrigin.left + dragDelta.x;
-
-  let id;
-
+  // The try opens immediately so nothing between the guard and the teardown can
+  // run unprotected (issue #9).
   try {
+    // A coalesced frame may still be pending; flush it so bounds are measured
+    // against the box the user last saw (issue #4).
+    renderMemoDrag();
+
+    // Derived from what is on screen rather than from e.clientX/Y: pointercancel
+    // and lostpointercapture carry no meaningful coordinates (issue #9).
+    top = dragOrigin.top + dragDelta.y;
+    left = dragOrigin.left + dragDelta.x;
+
     const bounds = checkBounds(board.getBoundingClientRect(), memo.getBoundingClientRect());
 
     if (bounds) {
@@ -260,8 +266,6 @@ async function handleMemoDragEnd(e) {
     // so manifest-data.json keeps its existing schema (issue #4).
     memo.style.top = `${top}px`;
     memo.style.left = `${left}px`;
-
-    id = memo.dataset.id;
   } finally {
     endMemoDrag(memo, e);
   }
@@ -277,16 +281,25 @@ async function handleMemoDragEnd(e) {
 // bound to mouseup (issue #10) — so lostpointercapture is a second route into
 // the same one-shot handler.
 function handleMemoCloseStart(e) {
-  if (e.button > 0 || !e.isPrimary || closeLatch) { return; }
+  if (e.button > 0 || !e.isPrimary) { return; }
 
+  const close = e.currentTarget;
+
+  // A fresh press is never gated on the latch. A latch left behind by a gesture
+  // whose terminal event never arrived is precisely the condition this control
+  // exists to survive, and refusing a press because of one would trade a single
+  // lost click for a permanently inert control (issue #10). Re-entry needs no
+  // guard either: reassigning the latch is a no-op, addEventListener with the
+  // same handler and options does not duplicate, and the terminal event is
+  // still consumed exactly once below.
   e.preventDefault();
-  e.target.setPointerCapture(e.pointerId);
+  close.setPointerCapture(e.pointerId);
 
-  closeLatch = e.target;
+  closeLatch = close;
 
-  e.target.addEventListener("pointerup", handleMemoClose, { passive: false, useCapture: false });
-  e.target.addEventListener("pointercancel", handleMemoClose, { passive: false, useCapture: false });
-  e.target.addEventListener("lostpointercapture", handleMemoClose, { passive: false, useCapture: false });
+  close.addEventListener("pointerup", handleMemoClose, { passive: false, useCapture: false });
+  close.addEventListener("pointercancel", handleMemoClose, { passive: false, useCapture: false });
+  close.addEventListener("lostpointercapture", handleMemoClose, { passive: false, useCapture: false });
 };
 
 async function handleMemoClose(e) {
@@ -300,22 +313,38 @@ async function handleMemoClose(e) {
   close.removeEventListener("pointercancel", handleMemoClose, { passive: false, useCapture: false });
   close.removeEventListener("lostpointercapture", handleMemoClose, { passive: false, useCapture: false });
 
-  if (e.pointerId !== undefined && close.hasPointerCapture(e.pointerId)) {
+  if (close.hasPointerCapture(e.pointerId)) {
     close.releasePointerCapture(e.pointerId);
   }
 
   // pointercancel means the gesture was taken over, not completed — abort.
   if (e.type === "pointercancel") { return; }
 
+  // Releasing away from the control is the usual "I changed my mind" gesture and
+  // must still cancel. Testing this only on pointerup keeps the fail-safe: the
+  // sole branch that suppresses the dialog is one where a real pointerup was
+  // delivered, so a lostpointercapture standing in for a dropped pointerup falls
+  // through and still acts — the case issue #10 exists to fix.
+  if (e.type === "pointerup") {
+    const rect = close.getBoundingClientRect();
+    const inside = e.clientX >= rect.left && e.clientX <= rect.right &&
+      e.clientY >= rect.top && e.clientY <= rect.bottom;
+
+    if (!inside) { return; }
+  }
+
+  // Resolve the memo and its id before the in-flight flag is set, so a control
+  // already detached from its memo cannot throw past the flag and leave it true
+  // — which would make every close control inert (issue #10).
+  const memo = close.parentNode;
+  if (!memo) { return; }
+
+  const id = memo.dataset.id;
+
   // confirm() is a native Tauri dialog — asynchronous and non-blocking — so one
   // press must not be able to open a second one (issue #10).
   if (closeInFlight) { return; }
   closeInFlight = true;
-
-  // Resolve the memo and its id before awaiting the dialog; the tree can change
-  // while it is open (issue #10).
-  const memo = close.parentNode;
-  const id = memo.dataset.id;
 
   try {
     if (!await confirm("Are you sure you want to remove this memo?")) { return; }
@@ -336,15 +365,17 @@ function handleMemoResizeStart(e) {
   // pointer events (issue #9).
   if (e.button > 0 || !e.isPrimary) { return; }
 
+  const resize = e.currentTarget;
+
   // Prevent the native drag/selection so the pointer stream stays with us.
   e.preventDefault();
   // Capture guarantees pointerup/pointercancel are delivered to the handle even
   // if the OS swallows the native mouseup mid-drag (issue #9, same defect as #7).
-  e.target.setPointerCapture(e.pointerId);
+  resize.setPointerCapture(e.pointerId);
 
   decreaseAllMemoIndexes();
 
-  activeMemo = e.target.parentNode;
+  activeMemo = resize.parentNode;
   activeMemo.classList.add("active");
   activeMemo.style.zIndex = STATIC_INDEX;
 
@@ -355,7 +386,7 @@ function handleMemoResizeStart(e) {
 
   document.body.style.cursor = "nw-resize";
 
-  e.target.style.backgroundColor = "var(--gray)";
+  resize.style.backgroundColor = "var(--gray)";
 
   const x = snapToGrid(e.clientX, GRID_SIZE);
   const y = snapToGrid(e.clientY, GRID_SIZE);
@@ -371,10 +402,10 @@ function handleMemoResizeStart(e) {
   pendingSize = { width: width - 2, height: height - 2 };
 
   // With capture active these fire on the handle for the captured pointer.
-  e.target.addEventListener("pointermove", handleMemoResizeMove, { passive: false, useCapture: false });
-  e.target.addEventListener("pointerup", handleMemoResizeEnd, { passive: false, useCapture: false });
-  e.target.addEventListener("pointercancel", handleMemoResizeEnd, { passive: false, useCapture: false });
-  e.target.addEventListener("lostpointercapture", handleMemoResizeEnd, { passive: false, useCapture: false });
+  resize.addEventListener("pointermove", handleMemoResizeMove, { passive: false, useCapture: false });
+  resize.addEventListener("pointerup", handleMemoResizeEnd, { passive: false, useCapture: false });
+  resize.addEventListener("pointercancel", handleMemoResizeEnd, { passive: false, useCapture: false });
+  resize.addEventListener("lostpointercapture", handleMemoResizeEnd, { passive: false, useCapture: false });
 };
 
 function handleMemoResizeMove(e) {
@@ -402,17 +433,21 @@ function renderMemoResize() {
   resizeMemo.style.height = `${pendingSize.height}px`;
 };
 
-// Cursor, classes, listeners and capture teardown. Kept separate so it can run
-// from a finally, ahead of the awaited storage writes (issue #9).
+// Guard, pending frame, cursor, classes, listeners and capture teardown. Kept
+// separate so it can run from a finally covering the whole end handler, ahead of
+// the awaited storage writes (issue #9).
 function endMemoResize(memo, e) {
   const resize = memo.querySelectorAll(".resize")[0];
+
+  resizeMemo = null;
+  cancelRender();
 
   resize.removeEventListener("pointermove", handleMemoResizeMove, { passive: false, useCapture: false });
   resize.removeEventListener("pointerup", handleMemoResizeEnd, { passive: false, useCapture: false });
   resize.removeEventListener("pointercancel", handleMemoResizeEnd, { passive: false, useCapture: false });
   resize.removeEventListener("lostpointercapture", handleMemoResizeEnd, { passive: false, useCapture: false });
 
-  if (e && e.pointerId !== undefined && resize.hasPointerCapture(e.pointerId)) {
+  if (resize.hasPointerCapture(e.pointerId)) {
     resize.releasePointerCapture(e.pointerId);
   }
 
@@ -438,22 +473,22 @@ async function handleMemoResizeEnd(e) {
   if (!resizeMemo) { return; }
 
   const memo = resizeMemo;
+  const id = memo.dataset.id;
 
-  // A coalesced frame may still be pending; flush it so bounds are measured
-  // against the box the user last saw (issue #4).
-  renderMemoResize();
-  cancelRender();
+  let width, height;
 
-  resizeMemo = null;
-
-  // Derived from what is on screen rather than from e.clientX/Y: pointercancel
-  // and lostpointercapture carry no meaningful coordinates (issue #9).
-  const width = pendingSize.width;
-  const height = pendingSize.height;
-
-  let id;
-
+  // The try opens immediately so nothing between the guard and the teardown can
+  // run unprotected (issue #9).
   try {
+    // A coalesced frame may still be pending; flush it so bounds are measured
+    // against the box the user last saw (issue #4).
+    renderMemoResize();
+
+    // Derived from what is on screen rather than from e.clientX/Y: pointercancel
+    // and lostpointercapture carry no meaningful coordinates (issue #9).
+    width = pendingSize.width;
+    height = pendingSize.height;
+
     const bounds = checkBounds(board.getBoundingClientRect(), memo.getBoundingClientRect());
 
     if (bounds) {
@@ -473,8 +508,6 @@ async function handleMemoResizeEnd(e) {
       memo.style.top = `${top}px`;
       memo.style.left = `${left}px`;
     }
-
-    id = memo.dataset.id;
   } finally {
     endMemoResize(memo, e);
   }
@@ -562,6 +595,28 @@ function renderBoardDrag() {
   selection.style.height = `${pendingSelection.height}px`;
 };
 
+// Guard, pending frame, cursor, class, listeners, capture and the box itself.
+// Kept separate so it can run from a finally covering the whole end handler, and
+// so it lands ahead of the awaited storage writes below (issue #9).
+function endBoardDrag(currentSelection, e) {
+  selection = null;
+  pendingSelection = null;
+  cancelRender();
+
+  board.removeEventListener("pointermove", handleBoardDragMove, { passive: false, useCapture: false });
+  board.removeEventListener("pointerup", handleBoardDragEnd, { passive: false, useCapture: false });
+  board.removeEventListener("pointercancel", handleBoardDragEnd, { passive: false, useCapture: false });
+  board.removeEventListener("lostpointercapture", handleBoardDragEnd, { passive: false, useCapture: false });
+
+  if (board.hasPointerCapture(e.pointerId)) {
+    board.releasePointerCapture(e.pointerId);
+  }
+
+  document.body.style.cursor = null;
+  board.classList.remove("active");
+  if (currentSelection.isConnected) { currentSelection.remove(); }
+};
+
 async function handleBoardDragEnd(e) {
   // pointerup, pointercancel and lostpointercapture all route here; guard so the
   // shared cleanup runs exactly once regardless of which arrives first.
@@ -569,50 +624,39 @@ async function handleBoardDragEnd(e) {
 
   const currentSelection = selection;
 
-  // A coalesced frame may still be pending; flush it so the box we measure is
-  // the box the user last saw (issue #4).
-  renderBoardDrag();
-  cancelRender();
+  let width, height, top, left;
 
-  selection = null;
-  pendingSelection = null;
+  // The try opens immediately so nothing between the guard and the teardown can
+  // run unprotected (issue #9).
+  try {
+    // A coalesced frame may still be pending; flush it so the box we measure is
+    // the box the user last saw (issue #4).
+    renderBoardDrag();
 
-  board.removeEventListener("pointermove", handleBoardDragMove, { passive: false, useCapture: false });
-  board.removeEventListener("pointerup", handleBoardDragEnd, { passive: false, useCapture: false });
-  board.removeEventListener("pointercancel", handleBoardDragEnd, { passive: false, useCapture: false });
-  board.removeEventListener("lostpointercapture", handleBoardDragEnd, { passive: false, useCapture: false });
+    const boardRect = board.getBoundingClientRect();
+    const selectionRect = currentSelection.getBoundingClientRect();
 
-  if (e.pointerId !== undefined && board.hasPointerCapture(e.pointerId)) {
-    board.releasePointerCapture(e.pointerId);
-  }
+    width = selectionRect.width - 2;
+    height = selectionRect.height - 2;
 
-  const boardRect = board.getBoundingClientRect();
-  const selectionRect = currentSelection.getBoundingClientRect();
+    top = selectionRect.top - boardRect.top;
+    left = selectionRect.left - boardRect.left;
 
-  const width = selectionRect.width - 2;
-  const height = selectionRect.height - 2;
+    const bounds = checkBounds(boardRect, selectionRect);
 
-  let top = selectionRect.top - boardRect.top;
-  let left = selectionRect.left - boardRect.left;
-
-  // Cursor and box teardown happen here, before the awaited storage writes
-  // below, so a throw in the storage path cannot strand either (issue #9).
-  document.body.style.cursor = null;
-  board.classList.remove("active");
-  if (currentSelection.isConnected) { currentSelection.remove(); }
-
-  const bounds = checkBounds(boardRect, selectionRect);
-
-  if (bounds) {
-    if (bounds.edge === "top") {
-      top = bounds.offset;
-    } else if (bounds.edge === "bottom") {
-      top = bounds.offset;
-    } else if (bounds.edge === "left") {
-      left = bounds.offset;
-    } else if (bounds.edge === "right") {
-      left = bounds.offset;
+    if (bounds) {
+      if (bounds.edge === "top") {
+        top = bounds.offset;
+      } else if (bounds.edge === "bottom") {
+        top = bounds.offset;
+      } else if (bounds.edge === "left") {
+        left = bounds.offset;
+      } else if (bounds.edge === "right") {
+        left = bounds.offset;
+      }
     }
+  } finally {
+    endBoardDrag(currentSelection, e);
   }
 
   if (width >= 80 && height >= 80) {
