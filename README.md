@@ -8,7 +8,7 @@ This is a personal macOS desktop build of [jonathontoon/manifest](https://github
 
 ## Install
 
-Download `Manifest_1.1.1_aarch64.dmg` from the [latest release](https://github.com/stephenmcgurrin/manifest/releases/latest), open it, and drag `Manifest.app` to `/Applications`.
+Download `Manifest_1.2.0_aarch64.dmg` from the [latest release](https://github.com/stephenmcgurrin/manifest/releases/latest), open it, and drag `Manifest.app` to `/Applications`.
 
 Apple Silicon only.
 
