@@ -12,15 +12,11 @@ Download `Manifest_1.2.0_aarch64.dmg` from the [latest release](https://github.c
 
 Apple Silicon only.
 
-### "Manifest is damaged and can't be opened"
+### First launch
 
-The app is unsigned, so macOS quarantines downloads and shows this error on first launch. After dragging `Manifest.app` to `/Applications`, clear the quarantine flag:
+The app is signed ad-hoc rather than with a paid Apple Developer ID, so macOS blocks the first launch of a downloaded copy with "Apple could not verify Manifest is free of malware" (older releases of macOS word it "cannot be opened because Apple cannot check it for malicious software").
 
-```bash
-xattr -dr com.apple.quarantine /Applications/Manifest.app
-```
-
-Then open the app normally.
+Dismiss the dialog, open **System Settings → Privacy & Security**, scroll to the note about Manifest being blocked, and click **Open Anyway**. Once only; subsequent launches are normal.
 
 ## Themes
 
