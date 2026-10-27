@@ -41,6 +41,9 @@
       "icons/icon.ico"
     ],
     "category": "Productivity",
+    "macOS": {
+      "signingIdentity": "-"
+    },
     "shortDescription": "An instant grid-based pinboard for note taking.",
     "longDescription": "Manifest is an instant grid-based pinboard for note taking."
   },
