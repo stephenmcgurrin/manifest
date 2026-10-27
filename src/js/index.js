@@ -476,6 +476,10 @@ async function handleMemoResizeEnd(e) {
   const id = memo.dataset.id;
 
   let width, height;
+  // Stays null unless checkBounds corrects the memo back inside the board; it
+  // then carries the exact top/left written below, so the persisted position is
+  // the one rendered (issue #13).
+  let position = null;
 
   // The try opens immediately so nothing between the guard and the teardown can
   // run unprotected (issue #9).
@@ -507,6 +511,8 @@ async function handleMemoResizeEnd(e) {
 
       memo.style.top = `${top}px`;
       memo.style.left = `${left}px`;
+
+      position = { top, left };
     }
   } finally {
     endMemoResize(memo, e);
@@ -514,6 +520,10 @@ async function handleMemoResizeEnd(e) {
 
   const memos = await getLocalStorageItem("manifest_memos");
   memos[id] = { ...memos[id], size: { width, height } };
+  // Without this the clamp lived in the DOM only and was lost on the next load
+  // (issue #13). Written only when a correction was made, so an unclamped resize
+  // still leaves the stored position untouched.
+  if (position) { memos[id].position = position; }
   await setLocalStorageItem("manifest_memos", memos);
 };
 
