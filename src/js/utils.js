@@ -5,6 +5,10 @@ import { GRID_SIZE } from "./globals";
 // Writes are synchronous-per-call: the file is ~1 KB and writeTextFile is microseconds,
 // so the prior debounce/quit-flush dance was not worth its complexity.
 
+// eslint 6's browser globals list predates structuredClone; it is present in
+// every Tauri webview, and the browser path never reaches it.
+/* global structuredClone */
+
 const DATA_FILE = "manifest-data.json";
 let initPromise = null;
 let isTauri = false;
@@ -54,7 +58,10 @@ export function initStorage() {
 export async function setLocalStorageItem(item, value) {
   if (!initPromise) { await initStorage(); } else { await initPromise; }
   if (isTauri) {
-    cache[item] = value;
+    // Clone in as well as out. The cache must own its values outright, or a
+    // caller that keeps the object it wrote (themes.js keeps userThemes) goes
+    // on mutating the cache in place after the write has been serialised.
+    cache[item] = structuredClone(value);
     try {
       await fsApi.writeTextFile(DATA_FILE, JSON.stringify(cache), { baseDir });
     } catch (err) {
@@ -68,7 +75,9 @@ export async function setLocalStorageItem(item, value) {
 export async function getLocalStorageItem(item) {
   if (!initPromise) { await initStorage(); } else { await initPromise; }
   if (isTauri) {
-    return item in cache ? cache[item] : null;
+    // Hand back a copy, never the cache entry itself: the browser path returns a
+    // fresh object from JSON.parse and callers mutate what they are given.
+    return item in cache ? structuredClone(cache[item]) : null;
   }
   return JSON.parse(window.localStorage.getItem(item));
 }
